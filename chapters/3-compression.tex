@@ -1,0 +1,108 @@
+\chapter{Hyperspectral Image Compression}
+
+The Consultative Committee for Space Data Systems (CCSDS) is a collaborative group working on the development of standards and algorithms for space applications. CCSDS Data Compression Working Group has released several algorithms for the compression of multi- and hyperspectral images at different stages during the compression process \cite{hernandez-cabroneroCCSDS1230B2LowComplexity2021}. In 2012 the committee released the CCSDS-123.0-B-1 specification for lossless compression, hereby refered to as \textit{issue 1}. This was in 2019 followed by the CCSDS-123.0-B-2, refered to as \textit{issue 2}, introducing support for near-lossless compression. The following section gives a brief overview of the issue 2 algorithm, and its differences with issue 1. For a detailed walk-through see the CCSDS specification \fullcite{LowComplexityLosslessNearLossless2019} \cite{LowComplexityLosslessNearLossless2019}.
+
+\section{Algorithm Overview}
+
+\begin{figure}[h]
+	\begin{center}
+		\includegraphics[width=0.7\textwidth]{figures/block-diagram.png}
+	\end{center}
+	\caption{Block diagram of the issue 1 and issue 2 compression algorithms.}
+	\label{fig:block-diagram}
+\end{figure}
+
+\autoref{fig:block-diagram} shows a block diagram of the issue 1 and issue 2 compression algorithms. The raw image samples are processed in a single pass, allowing fast implementations and minimal temporary storage. Samples are fed to the predictor stage, where sample values are predicted with an adaptive linear prediction method, using a small neighborhood of spatially and spectrally adjacent pixels \cite{chatziantoniouHighPerformanceRTLImplementation}. The results of the predictor are passed on to an encoder stage in which the image data is encoded into its compressed format. Each of the stages in the algorithm are controlled with a set of parameters, which are needed by the decoder. In the final stage these parameters are packed into a header which is shipped together with the compressed image.
+
+% Mention the z and t notations, and the basic image properties. Also mention the absolute and relative error limits, allowing fine tuned control over the near-lossless compression.
+
+As mentioned, the main new feature of issue 2 is the option for near-lossless compression. The notion of near-lossless, as compared to lossy compression, is that the user is provided with fine tuned control over the per pixel error limit through setting an absolute and a relative limit. The standard also allows band-dependant error limits, allowing higher compression of less important spectral bands \cite{hernandez-cabroneroCCSDS1230B2LowComplexity2021}. This is useful in the context of the HYPSO project, where the outer spectral bands tend to contain more noise \cite{bakkenHYPSO1CubeSatFirst2023}.
+
+Another important new feature of issue 2 is the addition of a hybrid-entropy encoder, in addition to the sample-adaptive and block-adaptive encoders of issue 1 . The work done by \citeauthor{chatziantoniouHighPerformanceRTLImplementation} suggests an architecture, written in portable VHDL, for such a hybrid-entropy encoder achieving a throughput of 341 $Msamples/s$ \cite{chatziantoniouHighPerformanceRTLImplementation}. This shows that high throughput implementations of the issue 2 encoder are possible, outperforming those of issue 1. For the remainder of this document the focus will be on the predictor stage of the compressor.
+
+The notation used in the following sections is the same as those used by the CCSDS specification in \cite{LowComplexityLosslessNearLossless2019}. Most notations will be mentioned in text, but not all are relevant for this discussion. For a full list and the readers convenience an overview is available in \autoref{tab:predictor-symbols}. Image dimensions are denoted as $N_z$, $N_x$ and $N_y$, where $z$ is the spectral band, and $x$ and $y$ the spatial dimensions. We will see that by carefully arranging the samples of the image before passing them to the compressor we can avoid some of the challenges in regards to hardware pipelining. For ease of use we introduce the notation $t$ for the current spatial sample position, leaving the choice of sample ordering out of the notation. Thus, sample $s_z(t)$ refers to the sample $s$ of spectral band $z$ and spatial position $t$.
+
+\begin{table}[h]
+	\caption{Issue 2 predictor symbol table.}
+	\label{tab:predictor-symbols}
+	\begin{center}
+		\begin{tabular}[c]{l|l}
+			\hline
+			\multicolumn{1}{l|}{\textbf{Symbol}} &
+			\multicolumn{1}{l}{\textbf{Name}}                                                      \\
+			\hline
+			$s_z(t)$                             & Image sample                                    \\
+			$\sigma_z(t)$                        & Local sum                                       \\
+			$U_z(t)$                             & Local difference vector                         \\
+			$\hat{d}_z(t)$                       & Central local difference                        \\
+			$\breve{s}_z(t)$                     & High-resolution predicted sample                \\
+			$\tilde{s}_z(t)$                     & Double-resolution predicted sample              \\
+			$\hat{s}_z(t)$                       & Predicted sample                                \\
+			$\Delta_z(t)$                        & Prediction residual                             \\
+			$q_z(t)$                             & Signed quantizer index                          \\
+			$s^{'}_z(t)$                         & Clipped quantizer bin center                    \\
+			$s^{''}_z(t)$                        & Sample representative                           \\
+			$\theta_z(t)$                        & Predicted sample and sample endpoint difference \\
+			$\delta_z(t)$                        & Mapped quantizer index                          \\
+			$e_z(t)$                             & Double-resolution prediction error              \\
+			$W_z(t)$                             & Weight vector                                   \\
+			\hline
+		\end{tabular}
+	\end{center}
+\end{table}
+
+
+\begin{figure}[h]
+	\begin{center}
+		\includegraphics[width=0.8\textwidth]{figures/predictor-high-level.png}
+	\end{center}
+	\caption{Block diagram of the issue 2 predictor, recreated from \cite{hernandez-cabroneroCCSDS1230B2LowComplexity2021}. The new blocks as compared to issue 1 are marked in red. See \autoref{tab:predictor-symbols} for symbol names.}
+	\label{fig:predictor-high-level}
+\end{figure}
+
+\autoref{fig:predictor-high-level} shows a block level view of the issue 2 predictor stage. To allow near-lossless compression the issue 2 predictor introduces a quantization step, and sample representatives, marked in red. In the quantization step, the difference between input samples $s_z(t)$ and predicted sample values $\hat{s}_z(t)$, named prediction residuals $\Delta_z(t)$, are grouped into bins. Thus collecting nearby values, reducing the possible sample value ranges and allowing higher compression ratios. The signed quantizer indices $q_z(t)$ are mapped to unsigned indices, the mapped quantizer indices $\delta_z(t)$, which are passed on to the encoder. Because the real sample values are not available to the decoder, the predictor uses sample representatives $s^{''}_z(t)$ during sample prediction. The use of sample representatives is one of the main reasons for the challenges of implementing the algorithm for high throughput hardware applications \cite{sanchezReducingDataDependencies2022}.
+
+\begin{figure}[h]
+	\begin{center}
+		\includegraphics[width=1\textwidth]{figures/predictor-data-deps.png}
+	\end{center}
+	\caption{Data dependencies of the issue 2 predictor stage, recreated from \cite{sanchezReducingDataDependencies2022}. See \autoref{tab:predictor-symbols} for symbol names.}
+	\label{fig:predictor-data-deps}
+\end{figure}
+
+\autoref{fig:predictor-data-deps} shows the data dependencies of the issue 2 predictor, where the critical path for hardware implementations is marked with red arrows. The sample representatives of previous spatial and spectral samples $s^{''}_{\leq z}(<t)$, forming the prediction neighborhood, are used to calculate the local sum $\sigma_z(t)$ and local difference vector $U_z(t)$, the latter holding local sum differences for the current and spectrally neighbouring samples. A key element in the adaptive nature of the prediction method is the weight vector $W_z(t)$. The vector is updated for each iteration of the algorithm, and controls how the local differences of spectrally neighbouring samples are weighted when calculating the central local difference $\hat{d}_z(t)$ of the current sample. Weight updates depend on the results of the sample representatives, quantization step and prediction calculations, and must be completed before the next sample can be processed. As indicated by the red arrows, this creates a bottleneck for efficient hardware implementations.
+
+\section{Optimizations for Hardware Implementation}
+
+Mention issue 1 implementations, how they are widely used and offer high throughput \cite{fjeldtvedtEfficientRealTimeFPGA2018}.
+
+Initial implementations very simple, requiring almost serial implmentations \cite{barriosHardwareImplementationCCSDS2021}. By extracting the quantizer step from the algorithm \citeauthor{chatziantoniouScalableDataRateNearLossless2022a} are able to achieve throughput of ish 200 Msamples, but at significant hardware penalty \cite{chatziantoniouScalableDataRateNearLossless2022a}. They also split up the image into chunks which may be processed in parallel. Use different design mothodologies, HLS vs VHDL RTL.
+
+\citeauthor{basconesRealTimeFPGAImplementation2022} uses a weird, diagonal ordering of the samples (in addition to pre-quantization?).
+
+\citeauthor{barriosRemovingDataDependencies2024} suggest not doing the weight updates, however this comes at the cost of worse compression performance \cite{barriosRemovingDataDependencies2024}. This allows full pipelining and high throughput.
+
+\citeauthor{sanchezReducingDataDependencies2022} suggests a mathematical optimization to remove the dependency of the quantization step when computing the weight update, in addition to using speculative execution \cite{sanchezReducingDataDependencies2022}. This significantly improves the possibilities of pipelining. Implemented by \fullcite{vorhaugDevelopmentIntegrationCCSDS}.
+
+\begin{figure}[h]
+	\begin{center}
+		\includegraphics[width=0.8\textwidth]{figures/pipeline-math-opt.png}
+	\end{center}
+	\caption{Suggested pipeline stages for hardware implementation using the mathematical optimization proposed by \citeauthor{sanchezReducingDataDependencies2022}. Recreated from \cite{sanchezReducingDataDependencies2022}.}
+	\label{fig:pipeline-math-opt}
+\end{figure}
+
+Using the mathematical optimization allows a significantly higher degree of pipelining as shown in \autoref{fig:pipeline-math-opt}. The bottleneck of this approach is the stage in which the predicted sample values and speculative weight updates are created. These must be completed in a single clock cycle, creating a long logical path capping the clock frequency.
+
+\begin{figure}
+	\begin{center}
+		\includegraphics[width=0.5\textwidth]{figures/weight-updates.png}
+	\end{center}
+	\caption{Reduced weight updating frequency allows a shorter critical path in hardware implementations, yielding higher throughput. Recreated from \cite{jiaRemovalFeedbackLoop2025}.}
+	\label{fig:weight-updates}
+\end{figure}
+
+
+\section{Selecting Algorithm Parameters}
+
+The algorithm has a lot of different parameters which affect the coding performance. When selecting values for these parameters the target instrument and images must be taken into consideration. No significant work has been done in order to select suitable values tailored for HYPSO images. However, the work done by \citeauthor{blanesPerformanceImpactParameter2019} gives general guidelines which in most cases will give acceptable results \cite{blanesPerformanceImpactParameter2019}. Work must be done in order to select absolute and/or relative error limits which produce an acceptable trade-off between coding performance and loss of information.
